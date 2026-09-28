@@ -102,6 +102,10 @@ do
   vim.g.have_nerd_font = false
 
   -- [[ Setting options ]]
+  -- Disable EditorConfig formatting on save and trailing newline injection
+  vim.g.editorconfig = false
+  vim.opt.fixendofline = false
+
   --  See `:help vim.o`
   -- NOTE: You can change these options as you wish!
   --  For more options, you can see `:help option-list`
@@ -163,6 +167,12 @@ do
 
   -- Show which line your cursor is on
   vim.o.cursorline = true
+
+  -- Show the full absolute file path in a separate line (winbar) at the top of each window
+  vim.o.winbar = "%F %m"
+
+  -- Show column at 80 characters width
+  vim.o.colorcolumn = '80'
 
   -- Minimal number of screen lines to keep above and below the cursor.
   vim.o.scrolloff = 10
@@ -434,7 +444,7 @@ do
   -- Load the colorscheme here.
   -- Like many other themes, this one has different styles, and you could load
   -- any other, such as 'tokyonight-storm', 'tokyonight-moon', or 'tokyonight-day'.
-  vim.cmd.colorscheme 'tokyonight-night'
+  vim.cmd.colorscheme 'catppuccin'
 
   -- Highlight todo, notes, etc in comments
   vim.pack.add { gh 'folke/todo-comments.nvim' }
@@ -524,6 +534,7 @@ do
     gh 'nvim-lua/plenary.nvim',
     gh 'nvim-telescope/telescope.nvim',
     gh 'nvim-telescope/telescope-ui-select.nvim',
+    gh 'nvim-telescope/telescope-live-grep-args.nvim',
   }
   if vim.fn.executable 'make' == 1 then table.insert(telescope_plugins, gh 'nvim-telescope/telescope-fzf-native.nvim') end
 
@@ -532,23 +543,66 @@ do
 
   -- See `:help telescope` and `:help telescope.setup()`
   require('telescope').setup {
-    -- You can put your default mappings / updates / etc. in here
-    --  All the info you're looking for is in `:help telescope.setup()`
-    --
-    -- defaults = {
-    --   mappings = {
-    --     i = { ['<c-enter>'] = 'to_fuzzy_refine' },
-    --   },
-    -- },
-    -- pickers = {}
+    defaults = {
+      path_display = { 'filename_first' },
+      sorting_strategy = 'ascending',
+      layout_strategy = 'vertical',
+      layout_config = {
+        vertical = {
+          mirror = true,
+          preview_height = 0.65,
+          prompt_position = 'top',
+          preview_cutoff = 0,
+        },
+        height = 0.9999,
+        width = 0.9999,
+      },
+    },
+    pickers = {
+      find_files = {
+        follow = true,
+        no_ignore = true,
+      },
+      live_grep = {
+        additional_args = function()
+          return { '--follow', '--no-ignore' }
+        end,
+      },
+      grep_string = {
+        additional_args = function()
+          return { '--follow', '--no-ignore' }
+        end,
+      },
+    },
     extensions = {
       ['ui-select'] = { require('telescope.themes').get_dropdown() },
+      live_grep_args = {
+        auto_quoting = true, -- enable/disable auto-quoting
+        vimgrep_arguments = {
+          "rg",
+          "--color=never",
+          "--no-heading",
+          "--with-filename",
+          "--line-number",
+          "--column",
+          "--smart-case",
+          "--follow",
+          "--no-ignore"
+        },
+        mappings = { -- extend mappings
+          i = {
+            ["<C-k>"] = require("telescope-live-grep-args.actions").quote_prompt(),
+            ["<C-i>"] = require("telescope-live-grep-args.actions").quote_prompt({ postfix = " --iglob " }),
+          },
+        },
+      },
     },
   }
 
   -- Enable Telescope extensions if they are installed
   pcall(require('telescope').load_extension, 'fzf')
   pcall(require('telescope').load_extension, 'ui-select')
+  pcall(require('telescope').load_extension, 'live_grep_args')
 
   -- See `:help telescope.builtin`
   local builtin = require 'telescope.builtin'
@@ -557,7 +611,16 @@ do
   vim.keymap.set('n', '<leader>sf', builtin.find_files, { desc = '[S]earch [F]iles' })
   vim.keymap.set('n', '<leader>ss', builtin.builtin, { desc = '[S]earch [S]elect Telescope' })
   vim.keymap.set({ 'n', 'v' }, '<leader>sw', builtin.grep_string, { desc = '[S]earch current [W]ord' })
-  vim.keymap.set('n', '<leader>sg', builtin.live_grep, { desc = '[S]earch by [G]rep' })
+  vim.keymap.set('n', '<leader>sg', function()
+    require('telescope').extensions.live_grep_args.live_grep_args({
+      previewer = true,
+      layout_config = {
+        vertical = {
+          preview_cutoff = 0,
+        },
+      },
+    })
+  end, { desc = '[S]earch by [G]rep (with args)' })
   vim.keymap.set('n', '<leader>sd', builtin.diagnostics, { desc = '[S]earch [D]iagnostics' })
   vim.keymap.set('n', '<leader>sr', builtin.resume, { desc = '[S]earch [R]esume' })
   vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
@@ -576,6 +639,12 @@ do
 
       -- Jump to the implementation of the word under your cursor.
       -- Useful when your language has ways of declaring types without an actual implementation.
+      --
+      -- NOTE: `gri` is *only* for interface/abstract methods. On a plain Go function,
+      -- gopls answers "... is a function, not a method" and nothing is opened.
+      -- Use `grd` below to jump to a function definition. If you instead see
+      -- "method textDocument/implementation is not supported by any server activated for this
+      -- buffer", that means no LSP client is attached at all -- check `:checkhealth vim.lsp`.
       vim.keymap.set('n', 'gri', builtin.lsp_implementations, { buffer = buf, desc = '[G]oto [I]mplementation' })
 
       -- Jump to the definition of the word under your cursor.
@@ -656,6 +725,24 @@ do
   -- If you're wondering about lsp vs treesitter, you can check out the wonderfully
   -- and elegantly composed help section, `:help lsp-vs-treesitter`
 
+  -- Configure LSP handlers to use rounded borders for float windows (Hover, Signature)
+  -- Configure LSP handlers to use rounded borders and open above the cursor
+  vim.lsp.handlers['textDocument/hover'] = function(err, result, ctx, config)
+    config = config or {}
+    config.border = 'rounded'
+    local f_bufnr, f_winnr = vim.lsp.handlers.hover(err, result, ctx, config)
+    if f_winnr and vim.api.nvim_win_is_valid(f_winnr) then
+      pcall(vim.api.nvim_win_set_config, f_winnr, { relative = 'cursor', anchor = 'SW', row = 0, col = 0 })
+    end
+    return f_bufnr, f_winnr
+  end
+
+  vim.lsp.handlers['textDocument/signatureHelp'] = function(err, result, ctx, config)
+    config = config or {}
+    config.border = 'rounded'
+    return vim.lsp.handlers.signature_help(err, result, ctx, config)
+  end
+
   -- Useful status updates for LSP.
   vim.pack.add { gh 'j-hui/fidget.nvim' }
   require('fidget').setup {}
@@ -667,6 +754,168 @@ do
   vim.api.nvim_create_autocmd('LspAttach', {
     group = vim.api.nvim_create_augroup('kickstart-lsp-attach', { clear = true }),
     callback = function(event)
+      local client = vim.lsp.get_client_by_id(event.data.client_id)
+      local offset_encoding = client and client.offset_encoding or 'utf-16'
+
+      -- Automatically generate a workspace-specific .clangd file if a C/C++ workspace is opened
+      if client and client.name == 'clangd' then
+        -- Find workspace root directory by searching upwards for standard root markers (.git, .repo)
+        local function find_workspace_root(start_dir)
+          local dir = start_dir
+          local git_root = nil
+          while dir and dir ~= "/" and dir ~= "" do
+            if vim.uv.fs_stat(dir .. '/.repo') then
+              return dir
+            end
+            if not git_root and (vim.uv.fs_stat(dir .. '/.git') or vim.uv.fs_stat(dir .. '/.repo')) then
+              git_root = dir
+            end
+            dir = vim.fs.dirname(dir)
+          end
+          return git_root
+        end
+        
+        local current_file_path = vim.api.nvim_buf_get_name(event.buf)
+        if current_file_path and current_file_path ~= "" then
+          local current_dir = vim.fs.dirname(current_file_path)
+          local root_dir = find_workspace_root(current_dir)
+          
+          if root_dir then
+            local clangd_file = root_dir .. '/.clangd'
+            local has_clangd = vim.uv.fs_stat(clangd_file)
+            
+            local needs_update = true
+            if has_clangd then
+              local f_read = io.open(clangd_file, "r")
+              if f_read then
+                local content = f_read:read("*all")
+                f_read:close()
+                -- If it's already using our absolute paths, skip updating
+                if content:find(root_dir, 1, true) then
+                  needs_update = false
+                end
+              end
+            end
+            
+            if needs_update then
+              local lines = {
+                "CompileFlags:",
+                "  Add:",
+              }
+              
+              -- 1. Gather all global include directories at depth <= 4 from the root
+              local global_includes = {}
+              local function walk(dir, depth)
+                if depth > 4 then return end
+                local handle = vim.uv.fs_scandir(dir)
+                if not handle then return end
+                while true do
+                  local name, type = vim.uv.fs_scandir_next(handle)
+                  if not name then break end
+                  if type == 'directory' then
+                    local child_path = dir .. '/' .. name
+                    if name ~= '.git' and name ~= '.repo' and name ~= '.ez' and name ~= 'node_modules' and name ~= 'output' and name ~= 'Build' then
+                      local lower_name = name:lower()
+                      if lower_name == 'include' or lower_name == 'includes' or lower_name == 'inc' then
+                        table.insert(global_includes, child_path)
+                      end
+                      walk(child_path, depth + 1)
+                    end
+                  end
+                end
+              end
+              walk(root_dir, 1)
+              
+              -- 2. Gather local include directories by walking up from the current file
+              local local_includes = {}
+              local dir = current_dir
+              while dir and dir ~= "/" and dir ~= "" do
+                local handle = vim.uv.fs_scandir(dir)
+                if handle then
+                  while true do
+                    local name, type = vim.uv.fs_scandir_next(handle)
+                    if not name then break end
+                    if type == 'directory' then
+                      local lower = name:lower()
+                      if lower == 'include' or lower == 'includes' or lower == 'inc' then
+                        table.insert(local_includes, dir .. '/' .. name)
+                      end
+                    end
+                  end
+                end
+                if dir == root_dir then break end
+                dir = vim.fs.dirname(dir)
+              end
+              
+              -- 3. Find the AutoGen.h directory for the current module if present under Build
+              local autogen_dir = nil
+              local module_name = nil
+              for segment in current_file_path:gmatch("[^/]+") do
+                if segment:find("Dxe") or segment:find("Pei") or segment:find("Smm") or segment:find("Lib") then
+                  module_name = segment
+                  break
+                end
+              end
+              if not module_name then
+                module_name = current_file_path:match("([^/]+)%.c$")
+              end
+              if module_name then
+                local build_path = root_dir .. '/Build'
+                if vim.uv.fs_stat(build_path) then
+                  local matches = vim.fs.find('AutoGen.h', { path = build_path, limit = 500 })
+                  for _, path in ipairs(matches) do
+                    if path:find("/" .. module_name .. "/") then
+                      autogen_dir = vim.fs.dirname(path)
+                      break
+                    end
+                  end
+                end
+              end
+              
+              -- 4. Consolidate and deduplicate include lines
+              local seen = {}
+              local function add_include(path)
+                if not seen[path] then
+                  seen[path] = true
+                  table.insert(lines, "    - -I" .. path)
+                end
+              end
+              
+              -- Prioritize local and autogen includes
+              if autogen_dir then add_include(autogen_dir) end
+              for _, path in ipairs(local_includes) do add_include(path) end
+              for _, path in ipairs(global_includes) do add_include(path) end
+              
+              -- Also add dynamic architecture include paths if we detect X64/x64 or similar
+              local edk2_dir = vim.uv.fs_stat(root_dir .. '/edk2') and 'edk2' or 'Edk2'
+              local x64_path = root_dir .. '/' .. edk2_dir .. '/MdePkg/Include/X64'
+              if vim.uv.fs_stat(x64_path) then
+                add_include(x64_path)
+              end
+              
+              -- Add standard compiler and preprocessor flags
+              local tail = {
+                "    - -std=c99",
+                "    - -fshort-wchar",
+                "    - -include",
+                "    - PiDxe.h"
+              }
+              for _, line in ipairs(tail) do
+                table.insert(lines, line)
+              end
+              
+              local f = io.open(clangd_file, "w")
+              if f then
+                f:write(table.concat(lines, "\n") .. "\n")
+                f:close()
+                vim.notify("Auto-generated .clangd for workspace: " .. root_dir, vim.log.levels.INFO)
+                pcall(vim.cmd, "LspRestart")
+              end
+            end
+          end
+        end
+      end
+
       -- NOTE: Remember that Lua is a real programming language, and as such it is possible
       -- to define small helper and utility functions so you don't have to repeat yourself.
       --
@@ -688,6 +937,215 @@ do
       -- WARN: This is not Goto Definition, this is Goto Declaration.
       --  For example, in C this would take you to the header.
       map('grD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
+
+      -- Custom smart hover function that combines standard hover and typeDefinition hover.
+      -- This allows variables, struct fields, and functions pointers (like gBS->LoadImage)
+      -- to display their complete underlying function signatures and parameters directly in hover!
+      local function hover_combined()
+        local bufnr = vim.api.nvim_get_current_buf()
+        local params = vim.lsp.util.make_position_params(0, offset_encoding)
+        
+        local standard_hover_res = nil
+        local type_hover_res = nil
+        local done_count = 0
+        
+        -- Helper function to extract preceding doc comments for macros from source files
+        local function get_macro_doc_from_def(path, line_idx)
+          local f = io.open(path, "r")
+          if not f then return nil end
+          local file_lines = {}
+          for line in f:lines() do
+            table.insert(file_lines, line)
+          end
+          f:close()
+          
+          local macro_line = line_idx + 1
+          if macro_line > #file_lines then return nil end
+          
+          local comment_lines = {}
+          local in_comment = false
+          for i = macro_line - 1, 1, -1 do
+            local line = file_lines[i]
+            if line:find("//", 1, true) or line:find("///", 1, true) then
+              table.insert(comment_lines, 1, line)
+            elseif line:find("*/", 1, true) then
+              in_comment = true
+              table.insert(comment_lines, 1, line)
+              if line:find("/*", 1, true) then
+                -- Single-line block comment, e.g. /* comment */
+                break
+              end
+            elseif in_comment then
+              table.insert(comment_lines, 1, line)
+              if line:find("/*", 1, true) then
+                -- Start of block comment
+                break
+              end
+            else
+              if line:match("^%s*$") then
+                -- continue
+              else
+                break
+              end
+            end
+          end
+          
+          if vim.tbl_isempty(comment_lines) then return nil end
+          
+          local clean_lines = {}
+          for _, line in ipairs(comment_lines) do
+            local cleaned = line:gsub("^%s*///%s*", ""):gsub("^%s*//%s*", ""):gsub("^%s*/%*%*%s*", ""):gsub("^%s*/%*%s*", ""):gsub("^%s*%*%*/%s*$", ""):gsub("^%s*%*/%s*$", ""):gsub("^%s*%*%s*@param%s+", "* **Param:** "):gsub("^%s*%*%s*@return%s+", "* **Return:** "):gsub("^%s*%*%s*@retval%s+", "* **RetVal:** "):gsub("^%s*%*%s*", ""):gsub("%s*$", "")
+            if cleaned ~= "" then
+              table.insert(clean_lines, cleaned)
+            end
+          end
+          
+          return table.concat(clean_lines, "\n")
+        end
+        
+        local function display_results()
+          if not standard_hover_res then
+            vim.lsp.buf.hover()
+            return
+          end
+          
+          local function get_markdown(res)
+            if type(res.contents) == 'string' then
+              return res.contents
+            elseif type(res.contents) == 'table' then
+              if res.contents.kind == 'markdown' then
+                return res.contents.value
+              else
+                return table.concat(res.contents, '\n')
+              end
+            end
+            return ""
+          end
+
+          local std_md = get_markdown(standard_hover_res)
+          
+          if not type_hover_res then
+            vim.lsp.handlers['textDocument/hover'](nil, standard_hover_res, { method = 'textDocument/hover', bufnr = bufnr }, {})
+            return
+          end
+          
+          local type_md = get_markdown(type_hover_res)
+          
+          -- Strip any overlapping prefix title from type definition hover to make it flow beautifully
+          type_md = type_md:gsub("^### type%-alias `.-`\n\n%-%-%-\n", "")
+          
+          local combined_md = std_md .. '\n\n---\n### Underlying Type Definition:\n' .. type_md
+          local combined_res = {
+            contents = {
+              kind = 'markdown',
+              value = combined_md
+            }
+          }
+          
+          vim.lsp.handlers['textDocument/hover'](nil, combined_res, { method = 'textDocument/hover', bufnr = bufnr }, {})
+        end
+        
+        local function check_done()
+          done_count = done_count + 1
+          if done_count == 2 then
+            display_results()
+          end
+        end
+        
+        -- 1. Query standard hover
+        vim.lsp.buf_request(bufnr, 'textDocument/hover', params, function(err, result, ctx, config)
+          if not err and result and result.contents then
+            standard_hover_res = result
+            
+            local std_md = result.contents.value or (type(result.contents) == 'string' and result.contents) or ""
+            local header = std_md:match("### macro [^\n]+")
+            local macro_name = header and header:match("([%%a_][%%a%%d_]*)")
+            if macro_name then
+              -- We are querying the macro definition location to extract doc comments
+              done_count = done_count - 1
+              vim.lsp.buf_request(bufnr, 'textDocument/definition', params, function(def_err, def_result, def_ctx, def_config)
+                if not def_err and def_result and not vim.tbl_isempty(def_result) then
+                  local target = def_result[1]
+                  local target_uri = target.uri or target.targetUri
+                  local target_range = target.range or target.targetSelectionRange
+                  if target_uri and target_range then
+                    local path = vim.uri_to_fname(target_uri)
+                    local doc = get_macro_doc_from_def(path, target_range.start.line)
+                    if doc then
+                      std_md = std_md .. '\n\n---\n### Direct Definition Documentation:\n' .. doc
+                      if type(standard_hover_res.contents) == 'table' and standard_hover_res.contents.kind == 'markdown' then
+                        standard_hover_res.contents.value = std_md
+                      else
+                        standard_hover_res.contents = { kind = 'markdown', value = std_md }
+                      end
+                    end
+                  end
+                end
+                check_done()
+              end)
+            end
+          end
+          check_done()
+        end)
+        
+        -- 2. Query type definition
+        vim.lsp.buf_request(bufnr, 'textDocument/typeDefinition', params, function(err, result, ctx, config)
+          if err or not result or vim.tbl_isempty(result) then
+            check_done()
+            return
+          end
+          
+          local target = result[1]
+          if not target then
+            check_done()
+            return
+          end
+          
+          local target_uri = target.uri or target.targetUri
+          local target_range = target.range or target.targetSelectionRange
+          if not target_uri or not target_range then
+            check_done()
+            return
+          end
+          
+          -- Avoid fetching type hover if it points to the exact same position as standard hover
+          if target_uri == params.textDocument.uri and 
+             target_range.start.line == params.position.line and 
+             math.abs(target_range.start.character - params.position.character) <= 3 then
+            check_done()
+            return
+          end
+          
+          -- Prepare buffer without creating or checking swapfiles
+          local path = vim.uri_to_fname(target_uri)
+          local target_bufnr = vim.fn.bufadd(path)
+          vim.bo[target_bufnr].swapfile = false
+          vim.fn.bufload(target_bufnr)
+          
+          -- Make sure the buffer is attached to active client
+          local client_id = event.data.client_id
+          vim.lsp.buf_attach_client(target_bufnr, client_id)
+          
+          local hover_params = {
+            textDocument = { uri = target_uri },
+            position = {
+              line = target_range.start.line,
+              character = target_range.start.character,
+            }
+          }
+          
+          vim.lsp.buf_request(target_bufnr, 'textDocument/hover', hover_params, function(hover_err, hover_res, hover_ctx, hover_cfg)
+            if not hover_err and hover_res and hover_res.contents then
+              type_hover_res = hover_res
+            end
+            check_done()
+          end)
+        end)
+      end
+
+      -- Show documentation / hover pop-up for the definition under your cursor.
+      --  See `:help K` or `:help vim.lsp.buf.hover()`
+      map('K', hover_combined, 'Hover Documentation')
 
       -- The following two autocommands are used to highlight references of the
       -- word under your cursor when your cursor rests there for a little while.
@@ -728,21 +1186,96 @@ do
     end,
   })
 
+  -- ------------------------------------------------------------------
+  -- gopls root resolution
+  -- ------------------------------------------------------------------
+  -- Goal: root gopls at the *nearest* enclosing Go module or workspace, never at
+  -- a parent `.git`/`.repo` checkout that contains no go.mod. In multi-repo
+  -- workspaces where Go code lives in nested subdirectories, nvim-lspconfig's
+  -- stock resolver:
+  --   vim.fs.root(fname,'go.work') or vim.fs.root(fname,'go.mod') or vim.fs.root(fname,'.git')
+  -- prefers a `go.work` found ANYWHERE up the tree over a closer `go.mod`. Using
+  -- `vim.fs.root(fname, { 'go.mod', 'go.work' })` checks both markers at each
+  -- directory level before walking up, guaranteeing we root at the nearest Go
+  -- module or workspace.
+  --
+  -- IMPORTANT: we must still reproduce upstream's GOMODCACHE / GOROOT handling.
+  -- Files under the module cache or the Go stdlib each sit next to their own
+  -- go.mod, so a naive "nearest go.mod" resolver would spawn a *second* gopls
+  -- rooted inside the read-only module cache (or at $GOROOT/src) the moment you
+  -- `grd` into a dependency. Upstream avoids that by reusing the root_dir of the
+  -- gopls that is already running. See nvim-lspconfig lsp/gopls.lua and
+  -- https://github.com/neovim/nvim-lspconfig/issues/804
+  local go_dirs = nil
+  local function get_go_dirs()
+    if go_dirs then return go_dirs end
+    go_dirs = { modcache = '', goroot = '' }
+    -- Resolved once, lazily, on the first Go buffer (not on startup).
+    -- GOWORK=off so this cannot fail because of an unrelated workspace file.
+    local ok, res = pcall(function() return vim.system({ 'go', 'env', 'GOMODCACHE', 'GOROOT' }, { text = true, env = { GOWORK = 'off' } }):wait(5000) end)
+    if ok and res and res.code == 0 then
+      local lines = vim.split(vim.trim(res.stdout or ''), '\n', { trimempty = true })
+      go_dirs.modcache = lines[1] and vim.fs.normalize(vim.trim(lines[1])) or ''
+      go_dirs.goroot = lines[2] and vim.fs.normalize(vim.trim(lines[2])) or ''
+    end
+    return go_dirs
+  end
+
+  ---@param bufnr integer
+  ---@param on_dir fun(dir: string?)
+  local function gopls_root_dir(bufnr, on_dir)
+    local bufname = vim.api.nvim_buf_get_name(bufnr)
+    if bufname == '' then return end
+    local fname = vim.fs.normalize(bufname)
+
+    local dirs = get_go_dirs()
+    local function is_under(dir) return dir ~= '' and fname:sub(1, #dir + 1) == dir .. '/' end
+    if is_under(dirs.modcache) or is_under(dirs.goroot) then
+      local clients = vim.lsp.get_clients { name = 'gopls' }
+      if #clients > 0 then
+        -- Attach read-only dependency/stdlib files to the gopls that sent us here.
+        return on_dir(clients[#clients].config.root_dir)
+      end
+    end
+
+    -- Nearest ancestor holding either marker wins (vim.fs.root checks every
+    -- marker at each directory level before walking up), so a nested module
+    -- still gets its own root.
+    on_dir(vim.fs.root(fname, { 'go.mod', 'go.work' }))
+  end
+
   -- Enable the following language servers
   --  Feel free to add/remove any LSPs that you want here. They will automatically be installed.
   --  See `:help lsp-config` for information about keys and how to configure
   ---@type table<string, vim.lsp.Config>
   local servers = {
-    -- clangd = {},
-    -- gopls = {},
-    -- pyright = {},
+    clangd = {},
+    gopls = {
+      -- Keep `go.work` files scoped to individual module roots rather than placing
+      -- a global `~/go.work` in $HOME (since the Go toolchain walks up the
+      -- directory tree to discover `go.work`). Do not force `GOWORK=off` here so
+      -- per-checkout `go.work` files are respected by gopls.
+      cmd = { 'gopls' },
+
+      -- See gopls_root_dir above. NOTE: the signature must be (bufnr, on_dir) for
+      -- `vim.lsp.Config` on Neovim 0.11+; the legacy `function(fname) return ... end`
+      -- form silently never starts the server.
+      root_dir = gopls_root_dir,
+
+      settings = {
+        gopls = {
+          expandWorkspaceToModule = false,
+        },
+      },
+    },
+    pyright = {},
     -- tsc = {},
     --
     -- Some languages (like rust) have entire language plugins that can be useful:
     --    https://github.com/mrcjkb/rustaceanvim
     --
     -- But for many setups, the LSP (`rust_analyzer`) will work just fine
-    -- rust_analyzer = {},
+    rust_analyzer = {},
 
     stylua = {}, -- Used to format Lua code
 
@@ -808,10 +1341,49 @@ do
 
   require('mason-tool-installer').setup { ensure_installed = ensure_installed }
 
+  -- Register + enable the servers.
+  --
+  -- WHY NOT `lspconfig[name].setup()`:
+  --   The previous code was
+  --     local configs = require('lspconfig.configs')
+  --     for name, server in pairs(servers) do
+  --       if configs[name] then lspconfig[name].setup(server) end
+  --     end
+  --   That is dead code twice over on the installed nvim-lspconfig (2.x):
+  --     1. `lspconfig.configs` is `setmetatable({}, { __newindex = ... })` -- it defines NO
+  --        `__index`, and `require('lspconfig')` populates it only lazily, on `lspconfig.<name>`
+  --        access. So `configs[name]` is nil for every server, the `if` never passes, and
+  --        `setup()` was never called for ANY server -- no LSP client ever started. That is the
+  --        real reason gopls appeared "not attached" / "method not supported by any server".
+  --     2. Even forcing the branch would not help: `lua/lspconfig/configs/` no longer exists in
+  --        2.x, so `lspconfig.gopls` would warn '[lspconfig] config "gopls" not found' and hand
+  --        back a no-op `{ setup = function() end }`.
+  --
+  -- Neovim 0.12 ships the native config API, and nvim-lspconfig ships its per-server defaults as
+  -- `lsp/<name>.lua` on the runtimepath. `vim.lsp.config(name, opts)` merges our overrides on top
+  -- of those defaults, and `vim.lsp.enable(name)` wires up the FileType autocmd that starts it.
+  -- (blink.cmp injects completion `capabilities` for every server via its own
+  -- `vim.lsp.config('*', ...)` in plugin/blink-cmp.lua, so nothing to do here.)
+  local to_enable = {}
   for name, server in pairs(servers) do
-    vim.lsp.config(name, server)
-    vim.lsp.enable(name)
+    -- Only enable names we can actually launch: either nvim-lspconfig ships an `lsp/<name>.lua`
+    -- for them, or this table supplies its own `cmd`. Anything else (a typo, or a pure CLI tool
+    -- listed here just so mason-tool-installer installs it) would register a config that can
+    -- never start.
+    --
+    -- NOTE: `stylua` DOES pass this check and is intentionally started. nvim-lspconfig ships
+    -- `lsp/stylua.lua` (stylua has an `--lsp` mode), and it is what actually formats Lua here:
+    -- lua_ls formatting is disabled above, and conform.nvim has no `lua` entry in
+    -- formatters_by_ft, so `<leader>f` reaches stylua through conform's `lsp_format='fallback'`.
+    -- If you would rather not run stylua as a server, add `lua = { 'stylua' }` to
+    -- `formatters_by_ft` in SECTION 7 and drop `stylua` from this table.
+    if server.cmd or #vim.api.nvim_get_runtime_file('lsp/' .. name .. '.lua', false) > 0 then
+      vim.lsp.config(name, server)
+      table.insert(to_enable, name)
+    end
   end
+  if #to_enable > 0 then vim.lsp.enable(to_enable) end
+
 end
 
 -- ============================================================
@@ -1023,7 +1595,7 @@ do
   -- NOTE: You can add your own plugins, configuration, etc. in `lua/custom/plugins/*.lua`.
   --
   -- For independent modules, uncomment the convenience loader:
-  -- require 'custom.plugins'
+  require 'custom.plugins'
   --
   -- `custom.plugins` automatically loads files from that directory, but their
   -- order is unspecified. If plugins depend on each other, keep them in the same
